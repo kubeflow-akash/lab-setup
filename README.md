@@ -17,12 +17,30 @@ written once connects the two. After that, granting and revoking access is just
 group membership, and ending a lab is just emptying the compartment — the
 policy, quotas and tag defaults never need touching again.
 
-## Setup
+## Install
 
 ```bash
-uv venv --python 3.12
-uv pip install -e .
+uv tool install --editable .
 ```
+
+This puts `labctl` on your PATH (via `~/.local/bin`) so you can run it as a
+plain command. `--editable` points it at this checkout, so edits to the source
+take effect immediately with no reinstall.
+
+To update it later after pulling changes, nothing is needed. To remove it:
+`uv tool uninstall labctl`.
+
+<details>
+<summary>Prefer not to install it globally?</summary>
+
+```bash
+uv venv --python 3.12 && uv pip install -e .
+uv run labctl <command>          # or: source .venv/bin/activate
+```
+
+Note that a plain `uv pip install -e .` does *not* put `labctl` on your PATH —
+it installs into `.venv/`, so you need `uv run` or an activated venv.
+</details>
 
 Requires an `~/.oci/config` profile with tenancy-admin rights. Edit `lab.toml`,
 then:
@@ -41,8 +59,8 @@ and tag defaults. It is idempotent: re-run it any time to apply a changed
 ```bash
 labctl add-user alice@example.com          # dry run
 labctl add-user alice@example.com --apply  # creates account, sends invite, grants access
-labctl list-users
-labctl remove-user alice@example.com --apply
+labctl list-users                          # who has access right now
+labctl remove-user alice@example.com --apply   # revokes access, keeps the account
 labctl status
 labctl doctor                              # check the setup is sound
 ```
@@ -51,8 +69,43 @@ labctl doctor                              # check the setup is sound
 which is what triggers the activation email — that email is the invite. If
 someone never receives it, `labctl resend-invite <email> --apply`.
 
-`remove-user` cuts access by removing group membership first, then deletes the
-account. Their *resources* are untouched; `nuke` handles those.
+### Access and accounts are separate
+
+Revoking access and deleting an account are different decisions, and only one of
+them is irreversible. labctl keeps them apart:
+
+| | command | reversible |
+|---|---|---|
+| revoke access | `remove-user` | yes — just re-add them |
+| delete the account | `purge-users` | **no** |
+| delete their resources | `nuke` | **no** |
+
+`remove-user` only removes someone from the lab group. That cuts all access
+immediately, because the group is what carries the permission. The account
+stays.
+
+### labctl only deletes accounts it created
+
+Every account labctl creates is stamped with an OCI freeform tag
+(`labctl = <compartment>`, plus a creation timestamp). These tags are visible on
+the user in the OCI console.
+
+That tag is the *only* thing `purge-users` will act on. An untagged account is
+assumed to belong to a real person who was in the domain before this tool
+existed, and labctl refuses to delete it — naming one explicitly is an error,
+not a confirmation prompt.
+
+Adding a pre-existing user to a lab is fine and normal; they get access but no
+tag, so they are never a deletion candidate.
+
+```bash
+labctl list-created          # accounts labctl created — the only deletable ones
+labctl purge-users           # dry run: shows every account that would be deleted
+labctl purge-users --apply   # then asks you to type the group name
+labctl purge-users alice@example.com --apply   # or just one
+```
+
+`nuke` never touches accounts at all — only resources.
 
 ## Ending a lab
 
@@ -87,6 +140,10 @@ thing that keeps costing money. `labctl doctor` also verifies every registered
 type against OCI's live list of searchable types, because a typo'd type name
 would otherwise mean a deleter that simply never fires.
 
+**Accounts outlive labs.** Participants are removed from the group at the end of
+a lab, not deleted. A domain typically contains real people who pre-date the
+tool, so deletion is opt-in, separate, and restricted to tagged accounts.
+
 **Vaults are the one exception.** KMS vaults can only be *scheduled* for
 deletion, minimum 7 days. `nuke` schedules them and says so.
 
@@ -102,3 +159,6 @@ created outside of it.
 ## Configuration
 
 See `lab.toml` — every option is commented.
+
+`labctl` finds `lab.toml` by walking up from the current directory, so run it
+from anywhere inside this repo. From elsewhere, pass `--config /path/to/lab.toml`.

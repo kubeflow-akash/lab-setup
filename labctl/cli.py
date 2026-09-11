@@ -169,9 +169,13 @@ def add_user(ctx, emails, name, apply):
 @click.option("--apply", is_flag=True, help="Actually remove. Without this, dry run.")
 @click.pass_context
 def remove_user(ctx, emails, apply):
-    """Revoke access and delete the account from the identity domain.
+    """Revoke a participant's access to the lab compartment.
 
-    Their resources are NOT removed — use `labctl nuke` for that.
+    Removes them from the lab group. The account itself is kept — deleting
+    accounts is a separate, explicit step (`labctl purge-users`), and accounts
+    labctl did not create are never deleted at all.
+
+    Their resources are untouched; use `labctl nuke` for those.
     """
     session = get_session(ctx)
     if not apply:
@@ -180,6 +184,71 @@ def remove_user(ctx, emails, apply):
         actions = _run_user_op(users_mod.remove_user, session, email, apply)
         for action in actions:
             console.print(f"  [green]•[/green] {action}")
+
+
+@main.command("list-created")
+@click.pass_context
+def list_created(ctx):
+    """List accounts labctl created — the only ones it will ever delete."""
+    session = get_session(ctx)
+    created = _run_user_op(users_mod.list_created, session)
+    if not created:
+        console.print("labctl has not created any accounts in this domain.")
+        return
+    table = Table(show_header=True, header_style="bold", box=None, pad_edge=False)
+    table.add_column("email")
+    table.add_column("created")
+    table.add_column("access")
+    table.add_column("status")
+    for p in created:
+        table.add_row(
+            p.email or p.username,
+            p.created_at or "[dim]unknown[/dim]",
+            "[green]in group[/green]" if p.in_group else "[dim]revoked[/dim]",
+            "[green]active[/green]" if p.active else "[yellow]inactive[/yellow]",
+        )
+    console.print(table)
+    console.print(f"\n{len(created)} account(s) created by labctl. "
+                  f"Delete them with [bold]labctl purge-users[/bold].")
+
+
+@main.command("purge-users")
+@click.argument("emails", nargs=-1)
+@click.option("--apply", is_flag=True, help="Actually delete. Without this, dry run.")
+@click.pass_context
+def purge_users(ctx, emails, apply):
+    """Delete accounts labctl created. Never touches anyone else.
+
+    With no arguments, targets every labctl-created account. Pre-existing
+    accounts in the domain are refused outright — this tool does not delete
+    people it did not create.
+    """
+    session = get_session(ctx)
+    actions = _run_user_op(users_mod.purge_users, session, emails or None, False)
+
+    if actions == ["no labctl-created users to delete"]:
+        console.print("no labctl-created accounts to delete.")
+        return
+
+    console.print("[bold]would delete these accounts:[/bold]")
+    for action in actions:
+        console.print(f"  [red]•[/red] {action}")
+
+    if not apply:
+        console.print("\n[yellow]dry run[/yellow] — nothing deleted. Re-run with --apply.")
+        return
+
+    typed = click.prompt(
+        f"\nType the group name to confirm irreversible account deletion",
+        default="",
+        show_default=False,
+    )
+    if typed.strip() != session.config.group:
+        err.print("[red]aborted[/red] — name did not match.")
+        sys.exit(1)
+
+    for action in _run_user_op(users_mod.purge_users, session, emails or None, True):
+        console.print(f"  [green]•[/green] {action}")
 
 
 @main.command("resend-invite")
@@ -206,11 +275,14 @@ def list_users(ctx):
     table.add_column("username")
     table.add_column("email")
     table.add_column("status")
+    table.add_column("origin")
     for p in participants:
         table.add_row(
             p.username,
             p.email,
             "[green]active[/green]" if p.active else "[yellow]inactive[/yellow]",
+            "[dim]labctl[/dim]" if p.created_by_labctl
+            else "[cyan]pre-existing[/cyan]",
         )
     console.print(table)
     console.print(f"\n{len(participants)} member(s) of '{session.config.group}'.")
