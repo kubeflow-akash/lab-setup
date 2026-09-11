@@ -199,3 +199,52 @@ def verify_registry(session: Session) -> tuple[list[str], list[str]]:
     bogus = sorted(set(deleters.BY_TYPE) - real)
     ignored_bogus = sorted(deleters.IGNORED_TYPES - real)
     return bogus, ignored_bogus
+
+
+def escalation_risks(session: Session) -> list[str]:
+    """Look for ways a lab participant could act outside the lab compartment.
+
+    The route that matters is instance principals: a participant with `manage
+    all-resources` can launch a compute instance, and if a dynamic group matches
+    instances in the lab compartment while a policy grants that dynamic group
+    rights elsewhere, the instance inherits them and the compartment boundary is
+    gone. This is reported for review rather than auto-failed, since a matching
+    rule can be arbitrarily complex.
+    """
+    warnings: list[str] = []
+    try:
+        comp_id = session.lab_compartment.id
+    except Exception:  # noqa: BLE001 - compartment may not exist yet
+        return warnings
+
+    groups = oci.pagination.list_call_get_all_results(
+        session.identity.list_dynamic_groups, session.tenancy_id
+    ).data
+    live = [g for g in groups if (g.matching_rule or "").strip()]
+    if not live:
+        return warnings
+
+    policies = oci.pagination.list_call_get_all_results(
+        session.identity.list_policies, session.tenancy_id
+    ).data
+
+    for group in live:
+        rule = group.matching_rule or ""
+        # A rule is relevant if it can match something born inside the lab
+        # compartment: either it names the compartment, or it constrains nothing.
+        names_lab = comp_id in rule
+        unscoped = "compartment.id" not in rule
+        if not (names_lab or unscoped):
+            continue
+        grants = [
+            f"{p.name}: {s}"
+            for p in policies
+            for s in p.statements
+            if group.name.lower() in s.lower() and "in tenancy" in s.lower()
+        ]
+        for grant in grants:
+            warnings.append(
+                f"dynamic group '{group.name}' can match resources in the lab compartment "
+                f"and holds tenancy-wide rights -> {grant}"
+            )
+    return warnings

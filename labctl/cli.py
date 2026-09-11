@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 
 import click
+import oci
 from rich.console import Console
 from rich.table import Table
 
@@ -436,6 +437,31 @@ def doctor(ctx):
     bogus, bogus_ignored = nuke_mod.verify_registry(session)
     check("every deleter targets a real resource type", not bogus, ", ".join(bogus))
     check("ignore list targets real resource types", not bogus_ignored, ", ".join(bogus_ignored))
+
+    console.print("\n[bold]blast radius[/bold]")
+    try:
+        policy = session.find_policy(cfg.policy_name)
+        check("access policy lives in tenancy root, out of participants' reach",
+              policy.compartment_id == session.tenancy_id)
+    except NotFound:
+        pass
+    try:
+        quota_ok = any(
+            q.name == cfg.quota_name and q.compartment_id == session.tenancy_id
+            for q in oci.pagination.list_call_get_all_results(
+                session.quotas.list_quotas, session.tenancy_id
+            ).data
+        )
+        if cfg.quotas.enabled:
+            check("quota lives in tenancy root, so participants cannot raise it",
+                  quota_ok, "" if quota_ok else "run `labctl bootstrap --apply`")
+    except Exception as exc:  # noqa: BLE001
+        check("quota reachable", False, str(exc))
+
+    risks = nuke_mod.escalation_risks(session)
+    check("no dynamic group grants escape from the lab compartment", not risks)
+    for risk in risks:
+        console.print(f"      [yellow]{risk}[/yellow]")
 
     check("single region subscribed (nuke sweeps one region)",
           len(session.subscribed_regions) == 1,

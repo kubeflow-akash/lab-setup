@@ -6,6 +6,7 @@ the supported way to apply a changed lab.toml.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 
 import oci
@@ -39,10 +40,21 @@ def policy_statements(session: Session, comp_name: str) -> list[str]:
 
     conditions: list[str] = []
     if cfg.block_policy_management:
+        # Without this, `manage all-resources` includes writing policies inside
+        # the compartment -- a participant could grant themselves more.
         conditions += [
             "request.permission != 'POLICY_CREATE'",
             "request.permission != 'POLICY_UPDATE'",
             "request.permission != 'POLICY_DELETE'",
+        ]
+    if cfg.block_compartment_creation:
+        conditions.append("request.permission != 'COMPARTMENT_CREATE'")
+    if cfg.block_vault_creation:
+        # A vault cannot be deleted for 7 days, so one created here keeps the
+        # compartment dirty long after the lab ends.
+        conditions += [
+            "request.permission != 'VAULT_CREATE'",
+            "request.permission != 'VAULT_UPDATE'",
         ]
     if cfg.restrict_to_region:
         conditions.append(f"request.region = '{_region_key(session)}'")
@@ -82,6 +94,37 @@ def _region_key(session: Session) -> str:
 # -- individual steps ----------------------------------------------------
 
 
+def _wait_for_compartment(session: Session, comp_id: str, max_wait_seconds: int = 300):
+    """Block until a freshly created compartment is readable and ACTIVE.
+
+    IAM is eventually consistent: for a few seconds after create_compartment
+    returns, GET on the brand-new OCID still answers 404 NotAuthorizedOrNotFound.
+    That is propagation lag, not a permissions problem, so a 404 here means "not
+    yet" rather than "never". oci.wait_until cannot absorb it -- its response
+    argument is evaluated before any retry logic runs -- so poll by hand.
+    """
+    deadline = time.monotonic() + max_wait_seconds
+    delay = 2.0
+    while True:
+        try:
+            comp = session.identity.get_compartment(comp_id).data
+            if comp.lifecycle_state == "ACTIVE":
+                return comp
+            state = comp.lifecycle_state
+        except oci.exceptions.ServiceError as exc:
+            if exc.status != 404:
+                raise
+            state = "not yet visible"
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"compartment {comp_id} was created but did not become ACTIVE "
+                f"within {max_wait_seconds}s (last seen: {state}). It most likely "
+                f"exists -- re-run `labctl bootstrap --apply` to continue."
+            )
+        time.sleep(delay)
+        delay = min(delay * 1.5, 15.0)
+
+
 def ensure_compartment(session: Session, apply: bool) -> Step:
     cfg = session.config
     try:
@@ -100,13 +143,7 @@ def ensure_compartment(session: Session, apply: bool) -> Step:
             description="Temporary lab environment. Contents are wiped by `labctl nuke`.",
         )
     ).data
-    oci.wait_until(
-        session.identity,
-        session.identity.get_compartment(comp.id),
-        "lifecycle_state",
-        "ACTIVE",
-        max_wait_seconds=300,
-    )
+    _wait_for_compartment(session, comp.id)
     return Step(f"compartment '{cfg.compartment}'", "create", comp.id)
 
 

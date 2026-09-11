@@ -30,7 +30,10 @@ class Config:
     region: str
     profile: str
     block_policy_management: bool
+    block_compartment_creation: bool
+    block_vault_creation: bool
     restrict_to_region: bool
+    allowed_email_domains: tuple[str, ...]
     quotas: Quotas
     tags_enabled: bool
     tag_namespace: str
@@ -75,6 +78,7 @@ def load(explicit: str | None = None) -> Config:
     lab = raw.get("lab", {})
     policy = raw.get("policy", {})
     quotas = raw.get("quotas", {})
+    invites = raw.get("invites", {})
     tags = raw.get("tags", {})
 
     for key in ("compartment", "group", "domain", "region"):
@@ -95,7 +99,12 @@ def load(explicit: str | None = None) -> Config:
         region=lab["region"].strip(),
         profile=lab.get("profile", "DEFAULT").strip(),
         block_policy_management=bool(policy.get("block_policy_management", True)),
-        restrict_to_region=bool(policy.get("restrict_to_region", True)),
+        block_compartment_creation=bool(policy.get("block_compartment_creation", True)),
+        block_vault_creation=bool(policy.get("block_vault_creation", True)),
+        restrict_to_region=bool(policy.get("restrict_to_region", False)),
+        allowed_email_domains=tuple(
+            d.strip().lower().lstrip("@") for d in invites.get("allowed_email_domains", ())
+        ),
         quotas=Quotas(
             enabled=bool(quotas.get("enabled", True)),
             allowed_compute=tuple(quotas.get("allowed_compute", ())),

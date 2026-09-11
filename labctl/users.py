@@ -90,9 +90,29 @@ def _split_name(email: str, full_name: str | None) -> tuple[str, str]:
 # -- operations ----------------------------------------------------------
 
 
+def check_email_allowed(session: Session, email: str) -> None:
+    """Reject addresses outside the configured domains.
+
+    `add_user` emails an activation link, so a typo'd address hands tenancy
+    access to whoever owns it. This is the cheapest place to catch that.
+    """
+    allowed = session.config.allowed_email_domains
+    if not allowed:
+        return
+    if "@" not in email:
+        raise UserError(f"{email!r} is not a valid email address")
+    domain = email.rsplit("@", 1)[1].lower()
+    if domain not in allowed:
+        raise UserError(
+            f"{email} is outside the allowed invite domains ({', '.join(allowed)}). "
+            f"Add its domain to [invites] allowed_email_domains in lab.toml if this is intended."
+        )
+
+
 def add_user(session: Session, email: str, full_name: str | None = None, apply: bool = False) -> list[str]:
     """Create the user if needed and put them in the lab group. Idempotent."""
     actions: list[str] = []
+    check_email_allowed(session, email)
     client = session.domains_client
     group = _group(session)
 
@@ -356,6 +376,17 @@ def _delete_account(session: Session, user_id: str, email: str) -> list[str]:
     actions: list[str] = []
     client = session.domains_client
     group = _group(session)
+
+    # Re-read the account and re-check provenance right before the irreversible
+    # call. The candidate list came from a SCIM list projection; if that ever
+    # omits the tag extension, every account would look untagged -- this makes
+    # the check depend on a full single-user read instead.
+    fresh = client.get_user(user_id).data
+    if not created_by_labctl(fresh):
+        raise UserError(
+            f"refusing to delete {email}: it is not tagged as labctl-created. "
+            f"This should not happen -- report it rather than forcing the delete."
+        )
 
     if user_id in _member_ids(group):
         client.patch_group(

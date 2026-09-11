@@ -156,6 +156,51 @@ GPUs stay at zero unless you deliberately raise them.
 A state file would be permanently wrong here, since `nuke` destroys resources
 created outside of it.
 
+## Security notes
+
+**The compartment boundary is the whole security model.** `manage all-resources`
+inside it is broad by design — that is the point of a lab. What matters is that
+nothing inside can reach out.
+
+Four things could let it reach out, and all four are addressed:
+
+- *Writing its own policies.* Blocked by a `request.permission` condition, so a
+  participant cannot widen their own grant.
+- *Instance principals.* A participant can launch instances. If a dynamic group
+  matched those instances and a policy gave that dynamic group tenancy-wide
+  rights, the compartment boundary would be gone. `labctl doctor` checks for
+  exactly this combination on every run.
+- *Raising their own limits.* The quota and the policy both live in the tenancy
+  root, outside the compartment, so participants cannot edit or delete either.
+  `doctor` asserts this.
+- *Escaping into sub-compartments.* Blocked — a participant building clusters
+  has no need to create one, and it keeps `nuke` sweeping a flat space.
+
+**Conditions fail open.** Each block above is a `request.permission != '...'`
+condition. A misspelled permission name does not break access — it silently
+stops blocking. Worth confirming once, by signing in as a lab user and trying to
+create a policy in the compartment. It should be refused.
+
+**Invites are the softest edge.** `add-user` emails an activation link, so a
+typo'd address invites a stranger into the lab group. Set
+`allowed_email_domains` in `lab.toml` to the domains you actually invite from.
+
+**Vault creation is blocked by default.** Not for confidentiality — a vault
+cannot be deleted for at least 7 days, so one created by accident keeps the
+compartment dirty long after the lab ends, and Virtual Private Vaults are priced
+far above anything else a lab would create.
+
+**Quotas cap resources, not spend.** They stop a participant allocating 64 OCPUs
+or a GPU node. They do not stop egress, or many small load balancers. For a hard
+ceiling on cost, add an OCI budget with alerts on the compartment.
+
+**Access has no expiry.** Nothing revokes a participant automatically. Ending a
+lab is a manual `remove-user` / `nuke`.
+
+**Attribution.** Every resource is auto-tagged with its creator and creation
+time, and every account labctl creates is tagged too — so OCI Audit plus those
+tags will tell you who did what.
+
 ## Configuration
 
 See `lab.toml` — every option is commented.

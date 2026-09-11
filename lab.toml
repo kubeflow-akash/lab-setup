@@ -19,12 +19,29 @@ profile = "DEFAULT"
 
 
 [policy]
-# Participants get `manage all-resources` in the compartment. These two switches
-# trim the sharp edges off that grant.
+# Participants get `manage all-resources` in the compartment. These switches trim
+# the sharp edges off that grant.
+#
+# NOTE: each of these works by adding a `request.permission != '...'` condition.
+# If a permission name were ever misspelled the condition silently has no effect
+# -- it fails OPEN, not closed. Verify each one once by trying the action as a
+# lab user; see "Security notes" in the README.
 
 # Block creating/updating/deleting IAM policies inside the lab compartment, so a
 # participant cannot widen their own access.
 block_policy_management = true
+
+# Block creating sub-compartments. Two reasons: quota scoping to a child
+# compartment is not something this setup has verified, so a sub-compartment is a
+# possible route around the ceilings below; and it keeps `nuke` sweeping a flat,
+# predictable space. Participants building clusters have no need for one.
+block_compartment_creation = true
+
+# Block creating KMS vaults. A vault cannot be deleted for at least 7 days, so
+# one created by accident keeps the compartment dirty for a week -- and a Virtual
+# Private Vault bills at a far higher rate than anything else a lab is likely to
+# create. Turn this off only if a lab genuinely needs customer-managed keys.
+block_vault_creation = true
 
 # Pin all activity to the region above, via a `request.region` policy condition.
 # OFF by default and deliberately so: this tenancy subscribes to exactly one
@@ -34,6 +51,14 @@ block_policy_management = true
 # second region, at which point it stops `nuke` from missing resources in a
 # region it does not sweep.
 restrict_to_region = false
+
+
+[invites]
+# Guards against the single most likely way a stranger gets into this tenancy: a
+# typo'd email address. `add-user` creates an account and emails an activation
+# link, so a mistyped address invites whoever owns it straight into the lab group.
+# List the domains you actually invite from; empty means any domain is allowed.
+allowed_email_domains = []
 
 
 [quotas]
