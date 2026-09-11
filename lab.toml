@@ -1,0 +1,76 @@
+# labctl configuration — edit before running `labctl bootstrap`.
+
+[lab]
+# Compartment that holds every lab resource. `nuke` empties THIS compartment
+# and nothing else. It is created under the tenancy root by `bootstrap`.
+compartment = "lab"
+
+# Group granted full access to the compartment above.
+group = "lab-users"
+
+# Identity domain that holds lab users. "Default" unless you made another.
+domain = "Default"
+
+# Single region keeps `nuke` simple and fast: it only has to sweep one region.
+region = "us-ashburn-1"
+
+# OCI CLI/SDK profile from ~/.oci/config used for all admin operations.
+profile = "DEFAULT"
+
+
+[policy]
+# Participants get `manage all-resources` in the compartment. These two switches
+# trim the sharp edges off that grant.
+
+# Block creating/updating/deleting IAM policies inside the lab compartment, so a
+# participant cannot widen their own access.
+block_policy_management = true
+
+# Pin all activity to the region above, via a `request.region` policy condition.
+# OFF by default and deliberately so: this tenancy subscribes to exactly one
+# region, and a user cannot create resources in an unsubscribed region at all --
+# so today this adds no security while adding a way to silently deny everything
+# if the condition value is ever malformed. Turn it on if you subscribe to a
+# second region, at which point it stops `nuke` from missing resources in a
+# region it does not sweep.
+restrict_to_region = false
+
+
+[quotas]
+# Enforced by OCI at resource-creation time, so a participant simply cannot
+# exceed them. Free to use, and the main thing standing between a lab and a
+# surprise bill.
+enabled = true
+
+# Deny-by-default. Every compute shape in the compartment is zeroed, then only
+# the families listed here are re-allowed. This is far more robust than trying
+# to cap shapes individually -- OCI defines 268 compute limits in this tenancy
+# and adds more with every hardware generation, so an allowlist stays correct
+# while a denylist silently rots.
+allowed_compute = [
+    "standard-e4-core-count",
+    "standard-e5-core-count",
+    "standard-a1-core-count",  # Ampere ARM; cheapest option for OKE node pools
+]
+
+# OCPU ceiling applied to each allowed family above.
+standard_ocpus = 32
+
+# GPU families to allow, e.g. ["gpu-a10-count"]. Empty means GPUs stay zeroed by
+# the deny-by-default rule above -- raise this deliberately, GPUs are what turn a
+# forgotten lab into a four-figure invoice.
+allowed_gpu = []
+gpu_count = 0
+
+# Total block + boot volume storage, in GB.
+block_storage_gb = 2000
+
+# Maximum OKE clusters that may exist at once.
+clusters = 5
+
+
+[tags]
+# Auto-applies a tag to every resource created in the compartment, so `nuke` can
+# report what it found and costs can be attributed per lab session.
+enabled = true
+namespace = "lab"
