@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release (for example: 0.1.0)
+        required: true
+        type: string
+      publish_to_pypi:
+        description: Publish package to PyPI (requires PYPI_API_TOKEN secret)
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate release version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          python - <<'PY'
+          import tomllib
+          from pathlib import Path
+
+          pyproject = tomllib.loads(Path("pyproject.toml").read_text())
+          project_version = pyproject["project"]["version"]
+          release_version = __import__("os").environ["RELEASE_VERSION"]
+
+          if project_version != release_version:
+              raise SystemExit(
+                  f"Version mismatch: pyproject.toml has {project_version}, "
+                  f"but workflow input is {release_version}."
+              )
+          PY
+
+      - name: Build distribution artifacts
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build twine
+          python -m build
+          python -m twine check dist/*
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.version }}
+          name: labctl v${{ inputs.version }}
+          generate_release_notes: true
+          files: dist/*
+
+      - name: Publish package to PyPI
+        if: ${{ inputs.publish_to_pypi && secrets.PYPI_API_TOKEN != '' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
